@@ -18,7 +18,7 @@ initial begin
 	received <= {10{1'b0}};
 end
 
-assign dout = received;
+assign dout = received[8:1];
 assign take = (FSM == 4'h5)? 1'b1:1'b0;
 
 always @(posedge clk) begin
