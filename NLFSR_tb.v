@@ -4,7 +4,7 @@ reg clk,res,ena;
 reg [6*8-1:0] co_buf;
 wire failure, found;
 
-NLFSR #(.SIZE(11), .NUM_OF_TAPS(6)) nlfsr(
+NLFSR nlfsr(
 	.clk (clk),
 	.res (res),
 	.ena (ena),
@@ -15,7 +15,7 @@ NLFSR #(.SIZE(11), .NUM_OF_TAPS(6)) nlfsr(
 
 initial begin
 	clk = 1'b0;
-	co_buf = {8'h4, 8'h5, 8'h1, 8'h2, 8'h4, 8'h6};
+	co_buf = {8'h01, 8'h08, 8'h09, 8'h0f, 8'h07, 8'h12};
 	res = 1'b1;
 	ena = 1'b0;
 	repeat (4) #5 clk = ~clk;
@@ -27,7 +27,12 @@ initial begin
 	ena = 1'b0;
 	@(negedge res);
 	ena = 1'b1;
-	repeat(1000000) @(posedge clk);
+	repeat(100) @(posedge clk);
+	ena = 1'b0;
+	#5 res = 1'b1;
+	#20 res = 1'b0;
+	#5 ena = 1'b1;
+	repeat(100) @(posedge clk);
 	$finish;
 end
 

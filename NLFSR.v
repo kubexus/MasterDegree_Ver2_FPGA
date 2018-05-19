@@ -1,4 +1,4 @@
-module NLFSR #(parameter SIZE = 11, NUM_OF_TAPS = 6)(
+module NLFSR #(parameter SIZE = 24, NUM_OF_TAPS = 6)(
 
 	input 								clk,
 	input 								res,
@@ -10,7 +10,7 @@ module NLFSR #(parameter SIZE = 11, NUM_OF_TAPS = 6)(
 );
 
 parameter [35:0] period = (2**SIZE) - 1;
-parameter INIT_VAL = {1'b1,{SIZE-1{1'b0}}};
+parameter INIT_VAL = {{SIZE-1{1'b0}},1'b1};
 
 reg [35:0] i;
 reg [SIZE-1:0] state;
@@ -33,11 +33,11 @@ always @ (posedge clk) begin
 		state 	<= INIT_VAL;
 		found 	<= 1'b0;
 		failure 	<= 1'b0;
-		i 			<= 0;
+		i 			<= {36{1'b0}};
 	end
 	if (ena) begin
 		if (!found && !failure) begin
-			state <= {feedback,state[SIZE-1:1]};
+			state <= {feedback, state[SIZE-1:1]};
 			i <= i + 1;
 		end
 		if (state == INIT_VAL) begin
