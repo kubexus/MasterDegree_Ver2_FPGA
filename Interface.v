@@ -22,22 +22,27 @@ reg 								transmit_byte;
 reg [(NUM_OF_TAPS*8)-1:0] 	buff;
 reg [7:0] 						which;
 
-reg [7:0] state;
-parameter	IDLE 				= 8'b00000001,
-				RECEIVE 			= 8'b00000010,
-				ASSIGN_TO_REG	= 8'b00000100,
-				CONFIRM			= 8'b00001000,
-				TRANSMIT_POLY	= 8'b00010000,
-				FOUND				= 8'b00100000,
-				FAILURE			= 8'b01000000,
-				RESET				= 8'b10000000;
+reg [10:0] state;
+parameter	IDLE 				= 11'b00000000001,
+				RECEIVE 			= 11'b00000000010,
+				ASSIGN_TO_REG	= 11'b00000000100,
+				CONFIRM			= 11'b00000001000,
+				TRANSMIT_POLY	= 11'b00000010000,
+				FOUND				= 11'b00000100000,
+				FAILURE			= 11'b00001000000,
+				RESET				= 11'b00010000000,
+				CAN_RECEIVE		= 11'b00100000000,
+				WAIT_FOR_ACCK	= 11'b01000000000,
+				SIGNAL_FOUND	= 11'b10000000000;
 				
 				
 parameter 	START = 	8'hf0,
 				END	=	8'hff,
 				ACCK	=	8'hf1,
 				ERR	=	8'hee,
-				FAIL	=	8'hf2;
+				FAIL	=	8'hf2,
+				CAN_REC = 8'hf4,
+				SIG_FOUND = 8'hf3;
 
 wire jeden; 
 assign jeden = 1'b0;
@@ -60,6 +65,7 @@ initial begin
 	i <= 0;
 	ena <= {NUM_OF_MODULES{1'b0}};
 	res <= {NUM_OF_MODULES{1'b0}};
+	co_buf <= {NUM_OF_MODULES*NUM_OF_TAPS{8'h00}};
 	test1 <= 1'b0;
 	test2 <= 1'b0;
 	test3 <= 1'b0;
@@ -94,20 +100,42 @@ endtask
 
 always @ (posedge clk) begin
 	case (state)
+	
+		RESET: begin
+			byte_out <= 8'h00;
+			transmit_byte <= 1'b0;
+			buff <= {NUM_OF_TAPS{8'h00}};
+			which <= 8'h00;
+			state <= IDLE;
+			receive_count <= 1;
+			assign_count <= 0;
+			i <= 0;
+			res <= {NUM_OF_MODULES{1'b0}};
+		end
+		
 		IDLE: begin
-			if (take_byte) begin
-				if (byte_in == START && ena != {NUM_OF_MODULES{1'b1}}) begin
-					test1 <= ~test1;
-					state <= RECEIVE;
-				end else conf(ERR);
-			end else begin 
-				if (found != {NUM_OF_MODULES{1'b0}}) begin
-					test2 <= ~test2;
-					state <= FOUND;
+			if (found != {NUM_OF_MODULES{1'b0}}) begin
+				state <= SIGNAL_FOUND;
+				transmit_byte <= 1'b1;
+				byte_out <= SIG_FOUND;
+			end else begin
+				if (take_byte) begin
+					if (byte_in == START && ena != {NUM_OF_MODULES{1'b1}}) begin
+						state <= CAN_RECEIVE;
+						transmit_byte <= 1'b1;
+						byte_out <= CAN_REC;
+					end
 				end
-				if (failure != {NUM_OF_MODULES{1'b0}}) begin
-					state <= FAILURE;
-				end
+			end
+			if (failure != {NUM_OF_MODULES{1'b0}}) begin
+				state <= FAILURE;
+			end
+		end
+		
+		CAN_RECEIVE: begin
+			if (tx_ready) begin
+				state <= RECEIVE;
+				transmit_byte <= 1'b0;
 			end
 		end
 		
@@ -131,10 +159,27 @@ always @ (posedge clk) begin
 			end else begin
 				assign_count <= assign_count + 1;
 			end
-			if (assign_count > NUM_OF_MODULES)
+			if (assign_count >= NUM_OF_MODULES) begin
 				conf(ERR);
+			end
+		end
+
+		SIGNAL_FOUND: begin
+			if (tx_ready) begin
+				state <= WAIT_FOR_ACCK;
+				transmit_byte <= 1'b0;
+			end
+		end
+
+		WAIT_FOR_ACCK: begin
+			if (take_byte) begin
+				if (byte_in == ACCK) begin
+					state <= FOUND;
+				end else state <= IDLE;
+			end
 		end
 		
+
 		FOUND: begin
 			if (found[i] == 1'b1) begin
 				which <= i + 1;
@@ -146,6 +191,30 @@ always @ (posedge clk) begin
 				conf(ERR);
 		end
 		
+		
+		TRANSMIT_POLY: begin
+			if (tx_ready) begin
+				if (i == 0) begin
+					buff <= co_buf[which*(NUM_OF_TAPS*8)-1-:NUM_OF_TAPS*8];
+				end
+				if (i>0 && i<=NUM_OF_TAPS) begin
+					byte_out <= buff[i*8-1-:8];
+					ena[which-1] 		<= 1'b0;
+				end
+				if (i == NUM_OF_TAPS + 1) begin
+					byte_out <= END;
+					res[which-1] 		<= 1'b1;
+				end
+				if (i == NUM_OF_TAPS + 2) begin
+					transmit_byte		<= 1'b0;
+					co_buf[(which)*(NUM_OF_TAPS*8)-1-:NUM_OF_TAPS*8] <= {NUM_OF_TAPS{8'h00}};
+					state	<= RESET;
+				end 
+				i <= i + 1;
+			end
+		end
+		
+
 		FAILURE: begin
 			if (failure[i] == 1'b1) begin
 				ena[i] <= 1'b0;
@@ -159,96 +228,13 @@ always @ (posedge clk) begin
 				conf(ERR);
 		end
 		
-		TRANSMIT_POLY: begin
-			if (tx_ready) begin
-				if (i == 0) begin
-					byte_out <= START;
-					ena[which-1] <= 1'b0;
-					buff <= co_buf[which*(NUM_OF_TAPS*8)-1-:NUM_OF_TAPS*8];
-				end
-				if (i>0 && i<=NUM_OF_TAPS) begin
-					byte_out <= buff[i*8-1-:8];
-				end
-				if (i == NUM_OF_TAPS + 1) begin
-					byte_out <= END;
-				end
-				if (i == NUM_OF_TAPS + 2) begin
-					transmit_byte		<= 1'b0;
-					res[which-1] 		<= 1'b1;
-					co_buf[(which)*(NUM_OF_TAPS*8)-1-:NUM_OF_TAPS*8] <= {NUM_OF_TAPS{8'h00}};
-					state	<= RESET;
-				end
-				i <= i + 1;
-			end
-		end
-		
+	
 		CONFIRM: begin
 			if (tx_ready) begin
 				state <= RESET;
 			end
 		end
-		
-		RESET: begin
-			byte_out <= 8'h00;
-			transmit_byte <= 1'b0;
-			buff <= {NUM_OF_TAPS{8'h00}};
-			which <= 8'h00;
-			state <= IDLE;
-			receive_count <= 1;
-			assign_count <= 0;
-			i <= 0;
-			res <= {NUM_OF_MODULES{1'b0}};
-		end
-	
-//		IDLE: begin
-//			if (take_byte)
-//				if (byte_in == START && ena != {NUM_OF_MODULES{1'b1}}) begin
-//					state <= RECEIVE;
-//					i <= 1;
-//					test <= 1'b1;
-//				end else	conf(ERR);
-//			if (found != {NUM_OF_MODULES{1'b0}}) begin
-//				i <= 0;
-//				state <= FOUND;
-//			end
-//			if (failure != {NUM_OF_MODULES{1'b0}}) begin
-//				i <= 0;
-//				state <= FAILURE;
-//			end
-//		end
-		
 
-		
-
-		
-//		CONFIRM: begin
-////			if (tx_ready) begin
-////				byte_out <= ACCK;
-////				test3 <= 1'b1;
-////				state <= RESET;
-////			end
-//				if (tx_ready) begin
-//					if (i == 0) begin
-//						byte_out <= 8'hff;
-//					end
-//					if (i>0 && i<NUM_OF_TAPS+1) begin
-//						byte_out <= 8'hee;
-//					end
-//					if (i == NUM_OF_TAPS + 1) begin
-//						byte_out <= 8'hfe;
-//						test3 <= 1'b1;
-//					end
-//					i 	<= i + 1;
-//				end
-//				if (i == NUM_OF_TAPS + 2) begin
-//					transmit_byte		<= 1'b0;
-//					//res[which] 			<= 1'b1;
-//					i <= i + 1;
-//				end
-//				if (i == NUM_OF_TAPS + 3) begin
-//					state					<= RESET;
-//				end
-//		end
 	endcase
 end
 assign transmit = (transmit_byte) ? 1'b1:1'b0;
